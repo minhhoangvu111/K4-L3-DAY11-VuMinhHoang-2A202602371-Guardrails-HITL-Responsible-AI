@@ -51,14 +51,27 @@ def detect_injection(user_input: str) -> InputStatus:
     Returns:
         ``"BLOCK"`` if injection detected (chặn), ``"ALLOW"`` otherwise (cho qua).
     """
+    if not user_input:
+        return "ALLOW"
+
+    # Canonicalize Unicode & invisible spacing (e.g. \u200b zero-width space)
+    normalized_input = re.sub(r"[\u200b-\u200d\ufeff\u00a0]", "", user_input)
+
     INJECTION_PATTERNS = [
-        # TODO: Add at least 5 regex patterns
-        # Example:
-        # r"ignore (all )?(previous|above) instructions",
+        r"ignore (all )?(previous|above) instructions",
+        r"you are now",
+        r"system prompt",
+        r"reveal (your |the )?(internal |system )?(instructions|prompt|password)",
+        r"pretend (you are|to be)",
+        r"act as (a |an )?unrestricted",
+        r"show me the (admin |internal )?password",
+        r"bypass (all )?(guardrails|safety|security|rules)",
+        r"override (all )?(system |previous )?(instructions|rules|prompts)",
+        r"disregard (all )?(previous|above) instructions",
     ]
 
     for pattern in INJECTION_PATTERNS:
-        if re.search(pattern, user_input, re.IGNORECASE):
+        if re.search(pattern, normalized_input, re.IGNORECASE):
             return "BLOCK"
     return "ALLOW"
 
@@ -74,6 +87,15 @@ def detect_injection(user_input: str) -> InputStatus:
 # Return ``"ALLOW"`` if banking-related and OK.
 # ============================================================
 
+import unicodedata
+
+def remove_vietnamese_accents(text: str) -> str:
+    """Remove Vietnamese diacritics/accents from a string."""
+    nfkd_form = unicodedata.normalize('NFD', text)
+    only_ascii = "".join([c for c in nfkd_form if not unicodedata.combining(c)])
+    return only_ascii.replace('đ', 'd').replace('Đ', 'D')
+
+
 def topic_filter(user_input: str) -> InputStatus:
     """Decide whether the input is on-topic for VinBank.
 
@@ -84,14 +106,31 @@ def topic_filter(user_input: str) -> InputStatus:
         ``"BLOCK"`` = chặn (off-topic hoặc topic cấm).
         ``"ALLOW"`` = cho qua (câu banking hợp lệ).
     """
+    if not user_input or not user_input.strip():
+        return "BLOCK"
+
     input_lower = user_input.lower()
+    normalized_text = remove_vietnamese_accents(input_lower)
 
-    # TODO: Implement logic:
     # 1. If input contains any blocked topic -> return "BLOCK"
-    # 2. If input doesn't contain any allowed topic -> return "BLOCK"
-    # 3. Otherwise -> return "ALLOW"
+    for topic in BLOCKED_TOPICS:
+        topic_norm = remove_vietnamese_accents(topic.lower())
+        if topic_norm in normalized_text or topic in input_lower:
+            return "BLOCK"
 
-    pass  # Replace with your implementation
+    # 2. If input doesn't contain any allowed topic -> return "BLOCK"
+    has_allowed = False
+    for topic in ALLOWED_TOPICS:
+        topic_norm = remove_vietnamese_accents(topic.lower())
+        if topic_norm in normalized_text or topic in input_lower:
+            has_allowed = True
+            break
+
+    if not has_allowed:
+        return "BLOCK"
+
+    # 3. Otherwise -> return "ALLOW"
+    return "ALLOW"
 
 
 # ============================================================
@@ -144,14 +183,18 @@ class InputGuardrailPlugin(base_plugin.BasePlugin):
         self.total_count += 1
         text = self._extract_text(user_message)
 
-        # TODO: Implement logic:
         # 1. Call detect_injection(text)
-        #    - If "BLOCK": increment blocked_count, return self._block_response("...")
-        # 2. Call topic_filter(text)
-        #    - If "BLOCK": increment blocked_count, return self._block_response("...")
-        # 3. If both return "ALLOW": return None (let message through)
+        if detect_injection(text) == "BLOCK":
+            self.blocked_count += 1
+            return self._block_response("Access denied: Prompt injection attempt detected.")
 
-        pass  # Replace with your implementation
+        # 2. Call topic_filter(text)
+        if topic_filter(text) == "BLOCK":
+            self.blocked_count += 1
+            return self._block_response("Access denied: Off-topic or forbidden query for VinBank support.")
+
+        # 3. If both return "ALLOW": return None (let message pass through)
+        return None
 
 
 # ============================================================
